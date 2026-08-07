@@ -88,9 +88,10 @@ Locked a crisp/loud balance after long A/B. Notable vs earlier tree:
 
 - Broadband convolver **+3 dB**; loudness from mid/high makeups, bass path kept softclip-safe
 - Keyboard HPF **~1700 Hz** so low keys don’t muddy bass
-- Vocal static: wide-ish **~3.3 kHz** sit + rasp dyn that doesn’t chase vibrato (slow attack, longer release on sustains)
-- Sparkle at **~9–11 kHz**, grit still cut around **5.5–6.2 kHz**
-- Busy sections: mid/woofer dyn + colder limiters; avoid raising all thresholds at once (that muddied sparse parts)
+- Vocal/guitar static: **~3–3.4 kHz** sit + rasp dyn (slow attack so vibrato doesn’t hash)
+- Sparkle as narrow **~9.8 kHz** peak; cymbal cut-through sat at **~5.8–7.2 kHz**
+- Stacked stabs: faster mid/presence dyn + colder limiters (no steep-XO redo — that muddied)
+- Avoid raising all compressor thresholds at once (muddied sparse parts)
 
 ## Still imperfect
 

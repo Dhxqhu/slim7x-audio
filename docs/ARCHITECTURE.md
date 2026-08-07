@@ -22,16 +22,16 @@ Speakers (Crossover)   ← PipeWire filter-chain sink (default)
            │     kick body shelf + ~180 Hz peak
            │     mud cut ~380 Hz
            │     woofer compressor (busy/kick stacks)
-           │     limiter_f (~−4 dBFS)
+           │     limiter_f (~−4.5 dBFS)
            │
            └─ High → keyboard tweeters (RL/RR)
                  HPF ~1700 Hz (keeps low keys off bass)
                  mid cloud / ~3.3 kHz vocal-static EQ
                  kb multiband dyn (mud | rasp | snare | stick)
                  broadband pad
-                 snare/crack EQ; air ~9–11 kHz
-                 grit notch ~5.5–6.2 kHz (radio-static zone)
-                 limiter_r (~−6 dBFS)
+                 snare/crack EQ; sparkle ~9.8 kHz; air ~11.5 kHz
+                 cymbal wash ~5.8–7.2 kHz (cut-through / static zone)
+                 limiter_r (~−6.5 dBFS)
                  LPF ~12 kHz
     │
     ▼
