@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply Slim 7x speaker gains (crossover path)
+After=wireplumber.service pipewire.service sound.target
+Wants=wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'sleep 5; %h/.local/bin/slim7x-speaker-gains; sleep 10; %h/.local/bin/slim7x-speaker-gains'
+
+[Install]
+WantedBy=default.target

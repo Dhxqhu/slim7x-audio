@@ -1,0 +1,25 @@
+[Unit]
+Description=Re-apply Slim 7x speaker gains when ALSA state drifts
+After=wireplumber.service
+Wants=wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'while true; do \
+  wb=$(amixer -c 0 sget "WooferLeft BOOST" 2>/dev/null | grep -o "\\[on\\]\\|\\[off\\]" | head -1); \
+  tb=$(amixer -c 0 sget "TweeterLeft BOOST" 2>/dev/null | grep -o "\\[on\\]\\|\\[off\\]" | head -1); \
+  soft=$(amixer -c 0 sget "WSA WSA_Softclip0 Enable" 2>/dev/null | grep -o "\\[on\\]\\|\\[off\\]" | head -1); \
+  rx=$(amixer -c 0 sget "WSA WSA_RX0 Digital" 2>/dev/null | sed -n "s/.*Mono: *\\([0-9]*\\).*/\\1/p" | head -1); \
+  vals=$(amixer -c 0 sget Speakers 2>/dev/null | awk "/Front Left:/{fl=\$4} /Front Right:/{fr=\$4} /Rear Left:/{rl=\$4} /Rear Right:/{rr=\$4} END{print fl\",\"fr\",\"rl\",\"rr}"); \
+  need=0; \
+  [ "$wb" != "[on]" ] && need=1; \
+  [ "$tb" != "[off]" ] && need=1; \
+  [ "$soft" != "[on]" ] && need=1; \
+  [ -n "$rx" ] && [ "$rx" -ne 81 ] && need=1; \
+  [ "$vals" != "6,5,6,5" ] && need=1; \
+  if [ "$need" -eq 1 ]; then %h/.local/bin/slim7x-speaker-gains; fi; \
+  sleep 2; \
+done'
+
+[Install]
+WantedBy=default.target

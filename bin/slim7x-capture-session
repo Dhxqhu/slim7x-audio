@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Guided 60s spectrum captures for Slim 7x DSP tuning.
+# Default: three genre passes (Steely Dan / EDM / high-energy jazz).
+set -euo pipefail
+
+OUT_DIR="${SLIM7X_CAP_DIR:-$HOME/Documents/slim7x-caps}"
+SECS="${SLIM7X_CAP_SECS:-60}"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+SESSION="$OUT_DIR/session-$STAMP"
+mkdir -p "$SESSION"
+
+TRACKS=(
+  "steelydan:Soft rock / Steely Dan–style (verse+chorus in one take)"
+  "edm:Powerful EDM / dubstep (drops + builds)"
+  "jazz:High-energy jazz (dense ensemble + drums)"
+)
+
+echo "=== Slim 7x capture session ==="
+echo "Output: $SESSION"
+echo "Each take: ${SECS}s  |  FFT 16384 (~2.9 Hz/bin)  |  target=effect_output"
+echo
+echo "Tips:"
+echo "  • Start the song a couple seconds before Enter so the logger catches the meat."
+echo "  • Keep system volume where you normally listen."
+echo "  • One continuous take per track is fine (verse+chorus together)."
+echo
+
+files=()
+i=1
+for entry in "${TRACKS[@]}"; do
+  slug="${entry%%:*}"
+  label="${entry#*:}"
+  out="$SESSION/${i}-${slug}.jsonl"
+  echo "────────────────────────────────────────"
+  echo "[$i/${#TRACKS[@]}] $label"
+  echo "Cue the track, then press Enter to start ${SECS}s capture…"
+  read -r _
+  echo "Recording… play through verse + chorus (or drop)."
+  slim7x-spectrum --log "$SECS" -o "$out"
+  files+=("$out")
+  echo
+  i=$((i + 1))
+done
+
+manifest="$SESSION/README.txt"
+{
+  echo "Slim 7x capture session $STAMP"
+  echo "duration_s=$SECS"
+  echo
+  for f in "${files[@]}"; do
+    echo "$(basename "$f")"
+  done
+  echo
+  echo "Compare examples:"
+  echo "  slim7x-spectrum --compare $SESSION/1-steelydan.jsonl $SESSION/2-edm.jsonl"
+  echo "  slim7x-spectrum --compare $SESSION/1-steelydan.jsonl $SESSION/3-jazz.jsonl"
+} >"$manifest"
+
+echo "=== done ==="
+echo "Files in: $SESSION"
+ls -la "$SESSION"
+echo
+echo "Tell the agent that session path when you're finished."
+echo "  $SESSION"

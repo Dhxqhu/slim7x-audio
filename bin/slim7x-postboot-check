@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "=== Slim7x / Hypr post-boot check ==="
+echo -n "swaybg: "; systemctl --user is-active swaybg.service
+echo -n "wallpaper: "; readlink -f "$HOME/.local/share/wallpapers/current-static" 2>/dev/null || echo missing
+echo -n "pipewire: "; systemctl --user is-active pipewire wireplumber
+echo -n "crossover: "
+timeout 5 wpctl status 2>/dev/null | rg -q 'slim7x_crossover' && echo present || echo MISSING
+echo -n "default sink pref: "; rg -o 'default.configured.audio.sink=.*' "$HOME/.local/state/wireplumber/default-nodes" 2>/dev/null || echo unset
+echo -n "digital RX0: "; amixer -c 0 sget 'WSA WSA_RX0 Digital' 2>/dev/null | rg 'Mono:' || true
+echo -n "BOOST: "; amixer -c 0 sget 'WooferLeft BOOST' 2>/dev/null | rg -o '\[on\]|\[off\]' || true
+echo -n "firefox-launch: "; command -v firefox-launch >/dev/null && echo ok || echo missing
+echo -n "MOZ wayland env in hypr: "; rg -q 'MOZ_ENABLE_WAYLAND,1' "$HOME/.config/hypr/hyprland.conf" && echo ok || echo missing

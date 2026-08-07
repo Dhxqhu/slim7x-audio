@@ -1,0 +1,901 @@
+#!/usr/bin/python3
+"""Slim 7x live spectrum + clip meter.
+
+Taps PipeWire so you can see what is hitting the speakers after DSP:
+  - Per-driver peak meters (woofer L/R, tweeter L/R)
+  - Dual spectrum (woofers vs keyboard drivers)
+  - High-res headless logs for tuning (FFT 16384, instrument + 1/3-oct bands)
+
+Usage:
+  slim7x-spectrum                              # GUI on effect_output (4ch post-DSP)
+  slim7x-spectrum --log 40 -o ~/Documents/peg-verse.jsonl
+  slim7x-spectrum --log 40 -o ~/Documents/peg-chorus.jsonl
+  slim7x-spectrum --compare ~/Documents/peg-verse.jsonl ~/Documents/peg-chorus.jsonl
+  slim7x-spectrum --help
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+from collections import deque
+from pathlib import Path
+
+# Prefer system packages when a venv pollutes PATH/PYTHONPATH
+_dist = "/usr/lib/python3/dist-packages"
+if _dist not in sys.path:
+    sys.path.insert(0, _dist)
+
+import numpy as np
+
+# GUI imports only needed for interactive mode; keep available for SpectrumApp
+import gi
+import cairo  # noqa: F401
+
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gtk, GLib, Gdk  # noqa: E402
+
+RATE = 48000
+FFT_GUI = 4096
+FFT_LOG = 16384              # ~2.93 Hz/bin @ 48 kHz — enough to dial snare/presence
+HOP = 1024
+CLIP_THRESH = 0.9886         # ~ -0.1 dBFS
+NEAR_THRESH = 0.89125        # ~ -1.0 dBFS
+PEAK_HOLD_SEC = 1.8
+
+# PCM after crossover (verified by ear): FL/FR = woofers, RL/RR = tweeters
+CH_NAMES = ("Woofer L", "Woofer R", "Tweeter L", "Tweeter R")
+WOOFER_CH = [0, 1]
+TWEETER_CH = [2, 3]
+
+# Coarse bands for GUI meters
+BANDS = (
+    ("Sub <130", 20, 130),
+    ("Bass", 130, 250),
+    ("Low-mid", 250, 700),
+    ("Mid", 700, 2800),
+    ("High", 2800, 16000),
+)
+
+# Instrument / mix bands for headless logs (contiguous, no overlap gaps)
+LOG_BANDS = (
+    ("sub_40", 20, 60),
+    ("sub_80", 60, 100),
+    ("bass_150", 100, 200),
+    ("bass_250", 200, 350),
+    ("lowmid_500", 350, 700),
+    ("mud_1k", 700, 1400),
+    ("box_2k", 1400, 2500),
+    ("presence_3k5", 2500, 4500),
+    ("snare_5k", 4500, 6500),
+    ("stick_8k", 6500, 10000),
+    ("air_12k", 10000, 16000),
+)
+
+# Prefer effect_output: real 4ch post-DSP. ALSA sink monitor often zeros RL/RR on this HW.
+DSP_TARGET = "effect_output.slim7x_crossover"
+HW_TARGET = "alsa_output.platform-sound.HiFi__Speaker__sink"
+PRE_TARGET = "audio_effect.slim7x_crossover"
+POST_TARGET = DSP_TARGET  # GUI default = DSP out (honest 4ch)
+
+
+def third_octave_bands(fmin: float = 25.0, fmax: float = 16000.0):
+    """ISO-ish 1/3-octave centers from ~25 Hz to 16 kHz."""
+    centers = []
+    f = 25.0
+    while f <= fmax * 1.01:
+        if f >= fmin:
+            centers.append(f)
+        f *= 2 ** (1 / 3)
+    bands = []
+    for c in centers:
+        lo = c / (2 ** (1 / 6))
+        hi = c * (2 ** (1 / 6))
+        if hi < 20 or lo > 20000:
+            continue
+        bands.append((f"f{int(round(c))}", max(20.0, lo), min(20000.0, hi)))
+    return tuple(bands)
+
+
+THIRD_BANDS = third_octave_bands()
+
+
+def db(x: float, floor: float = -90.0) -> float:
+    if x <= 1e-12:
+        return floor
+    return max(floor, 20.0 * math.log10(x))
+
+
+class AudioTap:
+    def __init__(self, target: str, channels: int, fft_size: int = FFT_GUI):
+        self.target = target
+        self.channels = channels
+        self.fft_size = fft_size
+        self._proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()
+        self._ring = deque(maxlen=max(8, (fft_size * 4) // HOP + 4))
+        self.peak = np.zeros(channels, dtype=np.float64)
+        self.hold = np.zeros(channels, dtype=np.float64)
+        self.hold_t = np.zeros(channels, dtype=np.float64)
+        self.clip_count = np.zeros(channels, dtype=np.int64)
+        self.near_count = np.zeros(channels, dtype=np.int64)
+        self.frames = 0
+        self.ok = False
+        self.err = ""
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+
+    def start(self) -> None:
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._proc and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+        if self._thread:
+            self._thread.join(timeout=1.5)
+
+    def reset_stats(self) -> None:
+        with self._lock:
+            self.clip_count[:] = 0
+            self.near_count[:] = 0
+            self.hold[:] = 0
+            self.hold_t[:] = 0
+
+    def snapshot(self):
+        with self._lock:
+            return {
+                "peak": self.peak.copy(),
+                "hold": self.hold.copy(),
+                "clip": self.clip_count.copy(),
+                "near": self.near_count.copy(),
+                "frames": self.frames,
+                "ok": self.ok,
+                "err": self.err,
+                "pcm": np.concatenate(list(self._ring)) if self._ring else np.zeros(
+                    (0, self.channels), dtype=np.float32
+                ),
+            }
+
+    def _run(self) -> None:
+        cmd = [
+            "pw-record",
+            "-a",
+            "--format=f32",
+            f"--channels={self.channels}",
+            f"--rate={RATE}",
+            "--latency=30ms",
+            f"--target={self.target}",
+            "-",
+        ]
+        try:
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+        except FileNotFoundError:
+            with self._lock:
+                self.err = "pw-record not found"
+            return
+
+        assert self._proc.stdout is not None
+        frame_bytes = self.channels * 4
+        chunk = frame_bytes * HOP
+        self.ok = True
+        while not self._stop.is_set():
+            data = self._proc.stdout.read(chunk)
+            if not data:
+                err = ""
+                if self._proc.stderr:
+                    err = self._proc.stderr.read().decode(errors="replace")[:200]
+                with self._lock:
+                    self.ok = False
+                    self.err = err.strip() or "capture ended"
+                break
+            n = len(data) // 4
+            samples = np.frombuffer(data, dtype="<f4", count=n)
+            if samples.size % self.channels:
+                continue
+            block = samples.reshape(-1, self.channels)
+            now = self.frames / RATE
+            with self._lock:
+                self._ring.append(block.copy())
+                absblk = np.abs(block)
+                blk_peak = absblk.max(axis=0)
+                self.peak = 0.82 * self.peak + 0.18 * blk_peak
+                for c in range(self.channels):
+                    if blk_peak[c] >= self.hold[c]:
+                        self.hold[c] = blk_peak[c]
+                        self.hold_t[c] = now
+                    elif now - self.hold_t[c] > PEAK_HOLD_SEC:
+                        self.hold[c] *= 0.90
+                    self.clip_count[c] += int(np.any(absblk[:, c] >= CLIP_THRESH))
+                    self.near_count[c] += int(np.any(absblk[:, c] >= NEAR_THRESH))
+                self.frames += block.shape[0]
+
+
+def spectrum_from_pcm(pcm: np.ndarray, ch_sel: slice | list[int], fft_size: int = FFT_GUI):
+    if pcm.shape[0] < fft_size:
+        return None, None
+    mono = pcm[-fft_size:, ch_sel].mean(axis=1).astype(np.float64)
+    window = np.hanning(fft_size)
+    spec = np.fft.rfft(mono * window)
+    mag = np.abs(spec) * 2.0 / window.sum()
+    freqs = np.fft.rfftfreq(fft_size, 1.0 / RATE)
+    return freqs, mag
+
+
+def band_energy(freqs: np.ndarray, mag: np.ndarray, bands=BANDS):
+    out = []
+    for name, lo, hi in bands:
+        m = (freqs >= lo) & (freqs < hi)
+        if not np.any(m):
+            out.append((name, -90.0))
+            continue
+        e = math.sqrt(float(np.mean(mag[m] ** 2)))
+        out.append((name, db(e)))
+    return out
+
+
+def peak_bins(freqs: np.ndarray, mag: np.ndarray, n: int = 8, fmin: float = 80.0):
+    """Loudest FFT bins (Hz, dB) — for snap/clutter diagnosis."""
+    mask = (freqs >= fmin) & (freqs < RATE * 0.48) & (mag > 1e-6)
+    if not np.any(mask):
+        return []
+    idx = np.where(mask)[0]
+    mags = mag[idx]
+    order = np.argsort(mags)[::-1][:n]
+    return [(round(float(freqs[idx[i]]), 1), round(db(float(mags[i])), 1)) for i in order]
+
+
+def _pct(vals: list[float], p: float) -> float:
+    if not vals:
+        return -90.0
+    a = np.asarray(vals, dtype=np.float64)
+    return float(np.percentile(a, p))
+
+
+def _band_stats(series: dict[str, list[float]]) -> dict:
+    out = {}
+    for name, vals in series.items():
+        if not vals:
+            out[name] = {"p50": -90.0, "p95": -90.0, "max": -90.0}
+            continue
+        out[name] = {
+            "p50": round(_pct(vals, 50), 1),
+            "p95": round(_pct(vals, 95), 1),
+            "max": round(max(vals), 1),
+        }
+    return out
+
+
+def run_log(
+    duration: float,
+    out_path: Path,
+    target: str,
+    channels: int,
+    interval: float = 0.12,
+) -> int:
+    fft_size = FFT_LOG
+    bin_hz = RATE / fft_size
+    tap = AudioTap(target, channels, fft_size=fft_size)
+    tap.start()
+
+    print(f"Logging {duration:.0f}s  target={target}  ch={channels}", flush=True)
+    print(
+        f"FFT={fft_size} ({bin_hz:.2f} Hz/bin)  "
+        f"instrument bands={len(LOG_BANDS)}  1/3-oct={len(THIRD_BANDS)}",
+        flush=True,
+    )
+    print(f"Play your section now → {out_path}", flush=True)
+
+    for _ in range(50):
+        snap = tap.snapshot()
+        if snap["ok"] and snap["frames"] > RATE * 0.25:
+            break
+        if snap["err"]:
+            print(f"capture error: {snap['err']}", file=sys.stderr)
+            tap.stop()
+            return 1
+        time.sleep(0.1)
+    else:
+        print(f"capture not ready: {tap.snapshot()['err'] or 'no audio yet'}", file=sys.stderr)
+        tap.stop()
+        return 1
+
+    # Sanity: all channels should move on DSP out
+    time.sleep(0.35)
+    warm = tap.snapshot()
+    dead = [CH_NAMES[i] for i, p in enumerate(warm["peak"]) if i < channels and db(float(p)) < -80]
+    if dead and channels >= 4 and target == DSP_TARGET:
+        print(f"WARNING: quiet/dead channels so far: {', '.join(dead)} (is music playing?)", flush=True)
+
+    tap.reset_stats()
+    rows = []
+    t0 = time.monotonic()
+    max_peak = np.full(channels, 1e-12)
+    peak_hist: list[list[float]] = [[] for _ in range(channels)]
+
+    series_w = {n: [] for n, *_ in LOG_BANDS}
+    series_t = {n: [] for n, *_ in LOG_BANDS}
+    series_3_w = {n: [] for n, *_ in THIRD_BANDS}
+    series_3_t = {n: [] for n, *_ in THIRD_BANDS}
+    peak_hist_w: list[tuple[float, float]] = []
+    peak_hist_t: list[tuple[float, float]] = []
+
+    try:
+        while time.monotonic() - t0 < duration:
+            snap = tap.snapshot()
+            pcm = snap["pcm"]
+            row: dict = {
+                "t": round(time.monotonic() - t0, 3),
+                "peak_db": [round(db(float(x)), 1) for x in snap["peak"]],
+                "hold_db": [round(db(float(x)), 1) for x in snap["hold"]],
+                "clip": [int(x) for x in snap["clip"]],
+                "near": [int(x) for x in snap["near"]],
+            }
+            max_peak = np.maximum(max_peak, snap["peak"])
+            for i, p in enumerate(snap["peak"]):
+                peak_hist[i].append(db(float(p)))
+
+            if pcm.shape[0] >= fft_size:
+                if channels >= 4:
+                    fw, mw = spectrum_from_pcm(pcm, WOOFER_CH, fft_size)
+                    ft, mt = spectrum_from_pcm(pcm, TWEETER_CH, fft_size)
+                else:
+                    fw, mw = spectrum_from_pcm(pcm, [0, 1], fft_size)
+                    ft, mt = fw, mw
+
+                if fw is not None and mw is not None:
+                    bw = band_energy(fw, mw, LOG_BANDS)
+                    row["woofer_bands"] = {n: round(v, 1) for n, v in bw}
+                    for n, v in bw:
+                        series_w[n].append(v)
+                    b3 = band_energy(fw, mw, THIRD_BANDS)
+                    row["woofer_third"] = {n: round(v, 1) for n, v in b3}
+                    for n, v in b3:
+                        series_3_w[n].append(v)
+                    peaks = peak_bins(fw, mw, n=8, fmin=60)
+                    row["woofer_peaks"] = peaks
+                    peak_hist_w.extend(peaks)
+
+                if ft is not None and mt is not None:
+                    bt = band_energy(ft, mt, LOG_BANDS)
+                    row["tweeter_bands"] = {n: round(v, 1) for n, v in bt}
+                    for n, v in bt:
+                        series_t[n].append(v)
+                    b3 = band_energy(ft, mt, THIRD_BANDS)
+                    row["tweeter_third"] = {n: round(v, 1) for n, v in b3}
+                    for n, v in b3:
+                        series_3_t[n].append(v)
+                    peaks = peak_bins(ft, mt, n=8, fmin=400)
+                    row["tweeter_peaks"] = peaks
+                    peak_hist_t.extend(peaks)
+
+            rows.append(row)
+            if len(rows) % max(1, int(0.5 / interval)) == 0:
+                pk = " ".join(f"{db(float(x)):+5.1f}" for x in snap["peak"])
+                cl = "/".join(str(int(x)) for x in snap["clip"])
+                print(f"  t={row['t']:5.1f}s  peak[{pk}]  clips={cl}", flush=True)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nstopped early", flush=True)
+    finally:
+        final = tap.snapshot()
+        tap.stop()
+
+    def top_peak_clusters(pairs: list[tuple[float, float]], bucket_hz: float = 50.0, n: int = 10):
+        from collections import defaultdict
+
+        acc: dict[int, list[float]] = defaultdict(list)
+        for hz, lev in pairs:
+            if lev < -70:
+                continue
+            acc[int(round(hz / bucket_hz) * bucket_hz)].append(lev)
+        ranked = sorted(
+            ((k, max(vs), round(sum(vs) / len(vs), 1), len(vs)) for k, vs in acc.items()),
+            key=lambda x: (x[1], x[3]),
+            reverse=True,
+        )
+        return [
+            {"hz": hz, "max_db": mx, "avg_db": avg, "hits": hits}
+            for hz, mx, avg, hits in ranked[:n]
+        ]
+
+    summary = {
+        "target": target,
+        "channels": channels,
+        "fft_size": fft_size,
+        "bin_hz": round(bin_hz, 3),
+        "duration_s": round(time.monotonic() - t0, 2),
+        "samples": len(rows),
+        "interval_s": interval,
+        "ch_names": list(CH_NAMES[:channels]),
+        "max_peak_db": [round(db(float(x)), 1) for x in max_peak],
+        "peak_p95_db": [round(_pct(h, 95), 1) for h in peak_hist],
+        "peak_p50_db": [round(_pct(h, 50), 1) for h in peak_hist],
+        "total_clips": [int(x) for x in final["clip"]],
+        "total_near": [int(x) for x in final["near"]],
+        "woofer_bands": _band_stats(series_w),
+        "tweeter_bands": _band_stats(series_t),
+        "woofer_third_oct": _band_stats(series_3_w),
+        "tweeter_third_oct": _band_stats(series_3_t),
+        "woofer_peak_clusters": top_peak_clusters(peak_hist_w, 40.0),
+        "tweeter_peak_clusters": top_peak_clusters(peak_hist_t, 40.0),
+    }
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w") as f:
+        f.write(json.dumps({"summary": summary}) + "\n")
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+
+    print("\n=== summary (instrument bands p50 / p95 / max) ===", flush=True)
+    print(f"target={target}  fft={fft_size} ({bin_hz:.2f} Hz/bin)  n={len(rows)}", flush=True)
+    print(f"peaks max={summary['max_peak_db']}  p95={summary['peak_p95_db']}", flush=True)
+    print(f"clips={summary['total_clips']}  near={summary['total_near']}", flush=True)
+    print("\nWOOFER:", flush=True)
+    for name, *_ in LOG_BANDS:
+        s = summary["woofer_bands"][name]
+        print(f"  {name:14s}  p50={s['p50']:+6.1f}  p95={s['p95']:+6.1f}  max={s['max']:+6.1f}", flush=True)
+    print("\nTWEETER:", flush=True)
+    for name, *_ in LOG_BANDS:
+        s = summary["tweeter_bands"][name]
+        print(f"  {name:14s}  p50={s['p50']:+6.1f}  p95={s['p95']:+6.1f}  max={s['max']:+6.1f}", flush=True)
+    print("\nTop woofer peaks:", summary["woofer_peak_clusters"][:5], flush=True)
+    print("Top tweeter peaks:", summary["tweeter_peak_clusters"][:5], flush=True)
+    print(f"\nwrote {out_path}", flush=True)
+
+    if any(c > 0 for c in summary["total_clips"]):
+        who = [CH_NAMES[i] for i, c in enumerate(summary["total_clips"]) if c > 0]
+        print(f"CLIPPING on: {', '.join(who)}", flush=True)
+    return 0
+
+
+def run_compare(path_a: Path, path_b: Path) -> int:
+    def load_summary(p: Path):
+        line = p.read_text().splitlines()[0]
+        return json.loads(line)["summary"]
+
+    a, b = load_summary(path_a), load_summary(path_b)
+    print(f"COMPARE\n  A: {path_a.name}\n  B: {path_b.name}\n")
+    print(f"{'band':14s}  {'A p95':>8}  {'B p95':>8}  {'ΔB-A':>8}   side")
+    for side, key in (("woofer", "woofer_bands"), ("tweeter", "tweeter_bands")):
+        print(f"--- {side} ---")
+        bands_a, bands_b = a.get(key, {}), b.get(key, {})
+        names = list(bands_a.keys()) or list(bands_b.keys())
+        for name in names:
+            pa = bands_a.get(name, {}).get("p95", -90)
+            pb = bands_b.get(name, {}).get("p95", -90)
+            d = pb - pa
+            mark = " <<" if abs(d) >= 3 else ""
+            print(f"  {name:12s}  {pa:+8.1f}  {pb:+8.1f}  {d:+8.1f}{mark}")
+    print("\nPeak clusters B (tweeter):", b.get("tweeter_peak_clusters", [])[:6])
+    print("Peak clusters B (woofer):", b.get("woofer_peak_clusters", [])[:6])
+    return 0
+
+
+class SpectrumApp(Gtk.Application):
+    def __init__(self, pre_dsp: bool, use_hw: bool = False):
+        super().__init__(application_id="local.slim7x.spectrum")
+        self.pre_dsp = pre_dsp
+        self.channels = 2 if pre_dsp else 4
+        if pre_dsp:
+            self.target = PRE_TARGET
+        elif use_hw:
+            self.target = HW_TARGET
+        else:
+            self.target = DSP_TARGET
+        self.tap: AudioTap | None = None
+        self._smooth_w = None
+        self._smooth_t = None
+
+    def do_activate(self):
+        win = Gtk.ApplicationWindow(application=self, title="Slim 7x Spectrum / Clip Meter")
+        win.set_default_size(920, 560)
+        win.connect("close-request", self._on_close)
+
+        css = Gtk.CssProvider()
+        css.load_from_data(
+            b"""
+            window { background: #121418; color: #e8eaed; }
+            label { color: #e8eaed; }
+            button {
+              background: #2a3038; color: #e8eaed; border-radius: 6px;
+              padding: 6px 12px; border: 1px solid #3a424c;
+            }
+            button:hover { background: #343c46; }
+            .title { font-weight: 700; font-size: 15px; }
+            .mono { font-family: monospace; font-size: 12px; }
+            .warn { color: #f5a623; }
+            .clip { color: #ff5c5c; font-weight: 700; }
+            .ok { color: #5dcea6; }
+            """
+        )
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.set_margin_top(10)
+        root.set_margin_bottom(10)
+        root.set_margin_start(12)
+        root.set_margin_end(12)
+        win.set_child(root)
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        title = Gtk.Label(label="Slim 7x Spectrum / Clip Meter", xalign=0)
+        title.add_css_class("title")
+        header.append(title)
+        header.append(Gtk.Box(hexpand=True))  # spacer
+
+        self.mode_lbl = Gtk.Label(
+            label=(
+                "PRE-DSP (crossover in)"
+                if self.pre_dsp
+                else f"POST-DSP ({'ALSA HW' if self.target == HW_TARGET else 'effect_output'})"
+            ),
+            xalign=1,
+        )
+        self.mode_lbl.add_css_class("mono")
+        header.append(self.mode_lbl)
+
+        btn_reset = Gtk.Button(label="Reset clips")
+        btn_reset.connect("clicked", self._reset)
+        header.append(btn_reset)
+
+        btn_swap = Gtk.Button(label="Toggle pre/post")
+        btn_swap.connect("clicked", self._toggle_mode)
+        header.append(btn_swap)
+        root.append(header)
+
+        self.status = Gtk.Label(xalign=0)
+        self.status.add_css_class("mono")
+        root.append(self.status)
+
+        self.draw = Gtk.DrawingArea()
+        self.draw.set_hexpand(True)
+        self.draw.set_vexpand(True)
+        self.draw.set_draw_func(self._draw)
+        root.append(self.draw)
+
+        legend = Gtk.Label(
+            label="Green=woofers  Amber=tweeters  Red flash=clip (≥ −0.1 dBFS)  "
+            "Yellow=near (−1 dBFS)  ·  Aim for holds under −3 dBFS on loud peaks",
+            xalign=0,
+            wrap=True,
+        )
+        legend.add_css_class("mono")
+        root.append(legend)
+
+        self.tap = AudioTap(self.target, self.channels, fft_size=FFT_GUI)
+        self.tap.start()
+        GLib.timeout_add(33, self._tick)
+        win.present()
+
+    def _on_close(self, *_):
+        if self.tap:
+            self.tap.stop()
+        return False
+
+    def _reset(self, *_):
+        if self.tap:
+            self.tap.reset_stats()
+
+    def _toggle_mode(self, *_):
+        if self.tap:
+            self.tap.stop()
+        self.pre_dsp = not self.pre_dsp
+        self.channels = 2 if self.pre_dsp else 4
+        self.target = PRE_TARGET if self.pre_dsp else DSP_TARGET
+        self.mode_lbl.set_text(
+            "PRE-DSP (crossover in)" if self.pre_dsp else "POST-DSP (effect_output)"
+        )
+        self._smooth_w = self._smooth_t = None
+        self.tap = AudioTap(self.target, self.channels, fft_size=FFT_GUI)
+        self.tap.start()
+
+    def _tick(self):
+        self.draw.queue_draw()
+        if self.tap:
+            s = self.tap.snapshot()
+            if not s["ok"]:
+                self.status.set_text(f"Capture: waiting/error — {s['err'] or self.target}")
+                self.status.add_css_class("warn")
+            else:
+                pk = max(float(x) for x in s["peak"]) if len(s["peak"]) else 0
+                hd = db(max(s["hold"])) if len(s["hold"]) else -90
+                clips = int(s["clip"].sum())
+                nears = int(s["near"].sum())
+                msg = (
+                    f"target={self.target}   instantaneous {db(pk):+.1f} dBFS   "
+                    f"peak-hold {hd:+.1f} dBFS   near={nears}  clips={clips}"
+                )
+                self.status.set_text(msg)
+                self.status.remove_css_class("warn")
+                self.status.remove_css_class("clip")
+                self.status.remove_css_class("ok")
+                if clips:
+                    self.status.add_css_class("clip")
+                elif nears:
+                    self.status.add_css_class("warn")
+                else:
+                    self.status.add_css_class("ok")
+        return True
+
+    def _draw(self, area, cr, width: int, height: int):
+        cr.set_source_rgb(0.07, 0.08, 0.09)
+        cr.rectangle(0, 0, width, height)
+        cr.fill()
+
+        if not self.tap:
+            return
+        s = self.tap.snapshot()
+        pcm = s["pcm"]
+        ch = self.channels
+
+        meter_h = 92
+        band_h = 70
+        pad = 8
+        spec_top = meter_h + pad
+        spec_bot = height - band_h - pad
+        spec_h = max(40, spec_bot - spec_top)
+
+        # --- peak meters ---
+        names = CH_NAMES[:ch] if ch == 4 else ("In L", "In R")
+        slot_w = (width - pad * 2) / max(ch, 1)
+        for i in range(ch):
+            x0 = pad + i * slot_w
+            peak = float(s["peak"][i]) if i < len(s["peak"]) else 0.0
+            hold = float(s["hold"][i]) if i < len(s["hold"]) else 0.0
+            clips = int(s["clip"][i]) if i < len(s["clip"]) else 0
+            level = min(1.0, peak)
+            hold_y = min(1.0, hold)
+
+            # meter background
+            cr.set_source_rgb(0.14, 0.16, 0.18)
+            cr.rectangle(x0 + 4, 22, slot_w - 10, 48)
+            cr.fill()
+
+            # fill from bottom
+            fill_h = 48 * level
+            if peak >= CLIP_THRESH:
+                cr.set_source_rgb(0.95, 0.25, 0.25)
+            elif peak >= NEAR_THRESH:
+                cr.set_source_rgb(0.95, 0.65, 0.15)
+            elif i < 2:
+                cr.set_source_rgb(0.30, 0.78, 0.62)
+            else:
+                cr.set_source_rgb(0.95, 0.70, 0.28)
+            cr.rectangle(x0 + 4, 22 + 48 - fill_h, slot_w - 10, fill_h)
+            cr.fill()
+
+            # hold line
+            hy = 22 + 48 - 48 * hold_y
+            cr.set_source_rgb(0.95, 0.95, 0.95)
+            cr.set_line_width(1.5)
+            cr.move_to(x0 + 4, hy)
+            cr.line_to(x0 + slot_w - 6, hy)
+            cr.stroke()
+
+            cr.set_source_rgb(0.85, 0.87, 0.90)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(11)
+            cr.move_to(x0 + 4, 14)
+            cr.show_text(names[i])
+            cr.move_to(x0 + 4, 86)
+            cr.show_text(f"{db(peak):+.1f}  hold {db(hold):+.1f}")
+            if clips:
+                cr.set_source_rgb(1.0, 0.35, 0.35)
+                cr.move_to(x0 + slot_w - 52, 14)
+                cr.show_text(f"CLIP×{clips}")
+
+        # --- spectrum ---
+        cr.set_source_rgb(0.11, 0.12, 0.14)
+        cr.rectangle(pad, spec_top, width - 2 * pad, spec_h)
+        cr.fill()
+
+        # grid
+        cr.set_source_rgba(1, 1, 1, 0.08)
+        cr.set_line_width(1)
+        for fref in (50, 100, 200, 500, 1000, 2000, 5000, 10000):
+            x = self._freq_to_x(fref, pad, width - 2 * pad)
+            cr.move_to(x, spec_top)
+            cr.line_to(x, spec_top + spec_h)
+            cr.stroke()
+        for dBref in (-12, -24, -36, -48, -60):
+            y = spec_top + spec_h * ((0 - dBref) / 90.0)
+            y = min(spec_top + spec_h, max(spec_top, y))
+            cr.move_to(pad, y)
+            cr.line_to(width - pad, y)
+            cr.stroke()
+
+        # 0 dBFS danger line
+        y0 = spec_top + spec_h * (0 / 90.0)
+        cr.set_source_rgba(1.0, 0.3, 0.3, 0.45)
+        cr.move_to(pad, y0)
+        cr.line_to(width - pad, y0)
+        cr.stroke()
+
+        if pcm.shape[0] >= FFT_GUI:
+            if ch == 4:
+                fw, mw = spectrum_from_pcm(pcm, WOOFER_CH, FFT_GUI)
+                ft, mt = spectrum_from_pcm(pcm, TWEETER_CH, FFT_GUI)
+            else:
+                fw, mw = spectrum_from_pcm(pcm, [0, 1], FFT_GUI)
+                ft, mt = None, None
+
+            def draw_curve(freqs, mag, rgb, smooth_attr):
+                if freqs is None:
+                    return None
+                # convert to dB and smooth
+                mdb = np.array([db(float(v), -90) for v in mag])
+                prev = getattr(self, smooth_attr)
+                if prev is None or len(prev) != len(mdb):
+                    prev = mdb
+                else:
+                    prev = 0.65 * prev + 0.35 * mdb
+                setattr(self, smooth_attr, prev)
+                cr.set_source_rgba(rgb[0], rgb[1], rgb[2], 0.85)
+                cr.set_line_width(2.0)
+                started = False
+                for i, f in enumerate(freqs):
+                    if f < 20 or f > 20000:
+                        continue
+                    x = self._freq_to_x(f, pad, width - 2 * pad)
+                    y = spec_top + spec_h * ((0 - prev[i]) / 90.0)
+                    y = min(spec_top + spec_h - 1, max(spec_top + 1, y))
+                    if not started:
+                        cr.move_to(x, y)
+                        started = True
+                    else:
+                        cr.line_to(x, y)
+                if started:
+                    cr.stroke()
+                return freqs, prev
+
+            wf = draw_curve(fw, mw, (0.30, 0.78, 0.62), "_smooth_w")
+            if ft is not None:
+                draw_curve(ft, mt, (0.95, 0.70, 0.28), "_smooth_t")
+
+            # band energy from woofer+tweeter mix
+            if wf is not None:
+                freqs, mdb = wf
+                # rebuild linear mag approx from smoothed dB for bands
+                mag_approx = 10 ** (mdb / 20.0)
+                bands = band_energy(freqs, mag_approx)
+            else:
+                bands = [(n, -90.0) for n, _, _ in BANDS]
+        else:
+            bands = [(n, -90.0) for n, _, _ in BANDS]
+
+        # freq labels
+        cr.set_source_rgba(0.7, 0.72, 0.75, 0.8)
+        cr.set_font_size(10)
+        for fref, label in (
+            (50, "50"),
+            (100, "100"),
+            (250, "250"),
+            (500, "500"),
+            (1000, "1k"),
+            (2000, "2k"),
+            (5000, "5k"),
+            (10000, "10k"),
+        ):
+            x = self._freq_to_x(fref, pad, width - 2 * pad)
+            cr.move_to(x - 8, spec_top + spec_h + 12)
+            cr.show_text(label)
+
+        # --- band meters ---
+        by = height - band_h + 8
+        bw = (width - 2 * pad) / len(BANDS)
+        for i, (name, val) in enumerate(bands):
+            x0 = pad + i * bw
+            # map -90..0 to bar
+            lvl = min(1.0, max(0.0, (val + 90) / 90.0))
+            cr.set_source_rgb(0.14, 0.16, 0.18)
+            cr.rectangle(x0 + 3, by + 16, bw - 8, 28)
+            cr.fill()
+            if val > -3:
+                cr.set_source_rgb(0.95, 0.3, 0.3)
+            elif val > -9:
+                cr.set_source_rgb(0.95, 0.65, 0.2)
+            else:
+                cr.set_source_rgb(0.45, 0.70, 0.95)
+            cr.rectangle(x0 + 3, by + 16 + 28 * (1 - lvl), bw - 8, 28 * lvl)
+            cr.fill()
+            cr.set_source_rgb(0.85, 0.87, 0.9)
+            cr.set_font_size(11)
+            cr.move_to(x0 + 3, by + 12)
+            cr.show_text(name)
+            cr.move_to(x0 + 3, by + 58)
+            cr.show_text(f"{val:+.1f} dB")
+
+    @staticmethod
+    def _freq_to_x(freq: float, x0: float, w: float) -> float:
+        f = max(20.0, min(20000.0, freq))
+        t = (math.log10(f) - math.log10(20)) / (math.log10(20000) - math.log10(20))
+        return x0 + t * w
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Slim 7x spectrum / clip meter — high-res logging for DSP tuning"
+    )
+    ap.add_argument(
+        "--pre",
+        action="store_true",
+        help="Monitor crossover input (2ch pre-DSP)",
+    )
+    ap.add_argument(
+        "--hw",
+        action="store_true",
+        help="Tap ALSA HW sink monitor instead of effect_output (often zeros RL/RR)",
+    )
+    ap.add_argument(
+        "--log",
+        type=float,
+        metavar="SECS",
+        help="Headless capture for SECS seconds → JSONL (FFT 16384, instrument + 1/3-oct)",
+    )
+    ap.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Log path (default: ~/Documents/slim7x-cap-<utc>.jsonl)",
+    )
+    ap.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("A.jsonl", "B.jsonl"),
+        help="Diff two captures (verse vs chorus) — band p95 deltas",
+    )
+    args = ap.parse_args()
+
+    if args.compare:
+        return run_compare(Path(args.compare[0]).expanduser(), Path(args.compare[1]).expanduser())
+
+    if args.log is not None:
+        if args.log <= 0:
+            print("--log needs a positive duration", file=sys.stderr)
+            return 1
+        if args.pre:
+            target, channels = PRE_TARGET, 2
+        elif args.hw:
+            target, channels = HW_TARGET, 4
+        else:
+            target, channels = DSP_TARGET, 4
+        out = args.output
+        if out is None:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            out = Path.home() / "Documents" / f"slim7x-cap-{stamp}.jsonl"
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        return run_log(args.log, out.expanduser(), target=target, channels=channels)
+
+    if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
+        print("No display — run inside your Hyprland session.", file=sys.stderr)
+        return 1
+
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    app = SpectrumApp(pre_dsp=args.pre, use_hw=args.hw)
+    return app.run(None)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

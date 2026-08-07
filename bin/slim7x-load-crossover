@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+have_crossover() {
+  timeout 3 pw-dump 2>/dev/null | grep -q 'audio_effect.slim7x_crossover'
+}
+
+# Already loaded?
+if have_crossover; then
+  :
+else
+  # Wait for hardware sink
+  for _ in $(seq 1 40); do
+    if timeout 2 pw-cli ls Node 2>/dev/null | grep -q 'alsa_output.platform-sound.HiFi__Speaker__sink'; then
+      break
+    fi
+    sleep 0.25
+  done
+
+  # Extract module args block from conf (between args = { ... } matching braces)
+  ARGS=$(python3 - <<'PY'
+from pathlib import Path
+text = Path.home().joinpath('.config/pipewire/slim7x-crossover-module.conf').read_text()
+start = text.find('args = {')
+if start < 0:
+    raise SystemExit('args block not found')
+i = text.find('{', start)
+depth = 0
+for j, ch in enumerate(text[i:], i):
+    if ch == '{':
+        depth += 1
+    elif ch == '}':
+        depth -= 1
+        if depth == 0:
+            print(text[i:j+1])
+            break
+else:
+    raise SystemExit('unbalanced braces')
+PY
+)
+
+  # conf.d may already have loaded it; only load if still missing
+  if ! have_crossover; then
+    timeout 15 pw-cli load-module libpipewire-module-filter-chain "$ARGS" >/dev/null
+  fi
+fi
+
+# Prefer crossover as default; keep HW at 100%
+XO=$(timeout 5 wpctl status 2>/dev/null | grep 'Speakers (Crossover)\|slim7x_crossover' | head -1 | grep -oE '[0-9]+' | head -1)
+HW=$(timeout 5 wpctl status 2>/dev/null | grep 'Speaker playback' | head -1 | grep -oE '[0-9]+' | head -1)
+if [ -n "${XO:-}" ]; then
+  wpctl set-default "$XO" || true
+  wpctl set-volume "$XO" 1.0 || true
+fi
+if [ -n "${HW:-}" ]; then
+  wpctl set-volume "$HW" 1.0 || true
+fi

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Slim 7x gains: woofer BOOST+softclip on (SPL). Tweeter BOOST off + PA 5 (snare-static headroom).
+# Woofer peaks clamped in DSP; tweeter drive kept cold to avoid softclip hash.
+#
+# PCM channel order (PipeWire/ALSA playback — verified by ear):
+#   FL/FR = Woofer L/R,  RL/RR = Tweeter L/R
+# Speakers mixer elem order is WooferL,TweeterL,WooferR,TweeterR (pads 6,5,6,5)
+set -euo pipefail
+CARD=0
+DIGITAL="${SLIM7X_DIGITAL:-81}"   # max digital (−3 dB on this codec); DSP limiters hold peaks
+WOOFER_PA="${SLIM7X_WOOFER_PA:-6}"
+TWEETER_PA="${SLIM7X_TWEETER_PA:-5}"   # -1 step — crisp headroom without static (woofers stay 6)
+
+for c in 'WSA WSA_RX0 Digital' 'WSA WSA_RX1 Digital' 'WSA2 WSA_RX0 Digital' 'WSA2 WSA_RX1 Digital'; do
+  amixer -c "$CARD" sset "$c" "$DIGITAL" >/dev/null
+done
+
+for side in WooferLeft WooferRight TweeterLeft TweeterRight; do
+  amixer -c "$CARD" sset "$side COMP" off >/dev/null 2>&1 || true
+  amixer -c "$CARD" sset "$side PBR" on >/dev/null 2>&1 || true
+  amixer -c "$CARD" sset "$side DAC" on >/dev/null 2>&1 || true
+done
+# Woofer BOOST = SPL; Tweeter BOOST was mid/high softclip grit
+for side in WooferLeft WooferRight; do
+  amixer -c "$CARD" sset "$side BOOST" on >/dev/null 2>&1 || true
+done
+for side in TweeterLeft TweeterRight; do
+  amixer -c "$CARD" sset "$side BOOST" off >/dev/null 2>&1 || true
+done
+
+for c in \
+  'WSA WSA_Softclip0 Enable' 'WSA WSA_Softclip1 Enable' \
+  'WSA2 WSA_Softclip0 Enable' 'WSA2 WSA_Softclip1 Enable'
+do
+  amixer -c "$CARD" sset "$c" on >/dev/null 2>&1 || true
+done
+
+for c in \
+  'WSA WSA_COMP1' 'WSA WSA_COMP2' \
+  'WSA2 WSA_COMP1' 'WSA2 WSA_COMP2'
+do
+  amixer -c "$CARD" sset "$c" off >/dev/null 2>&1 || true
+done
+
+# Woofer, Tweeter, Woofer, Tweeter
+amixer -c "$CARD" sset Speakers \
+  "${WOOFER_PA},${TWEETER_PA},${WOOFER_PA},${TWEETER_PA}" >/dev/null 2>&1 || true

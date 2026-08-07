@@ -1,0 +1,12 @@
+[Unit]
+Description=Load Slim 7x speaker crossover DSP
+After=wireplumber.service pipewire.service
+Wants=wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/slim7x-load-crossover
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
