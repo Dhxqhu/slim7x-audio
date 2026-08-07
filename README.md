@@ -2,7 +2,13 @@
 
 PipeWire speaker DSP for the **Lenovo Yoga Slim 7x** (Snapdragon X Elite, model `83ED` / `Yoga Slim 7 14Q8X9`).
 
-This is **not** a generic laptop EQ. It is tuned for this machine’s four-speaker layout and ALSA/WSA amp controls, targeting something closer to Windows Dolby loudness/clarity without the mid/high softclip “radio static” that shows up when the tweeters are overdriven.
+This is **not** a generic laptop EQ. It is tuned for this machine’s four-speaker layout and ALSA/WSA amp controls, targeting something closer to Windows Dolby loudness/clarity without the mid/high softclip “radio static” that shows up when the tweeters are overdriven. I've
+been trying to target the Dolby Atmos sound quality on my laptop by tuning it by comparison by ear. As you may know, sound output is one 
+of the most challenging problems to solve when installing linux on any machine. This current configuration tackles a lot of the issues that the stock configuration lacked. 
+For one the sound level was insanely low compared to the windows boot but increasing gain only created distortion so I found work-arounds to really dial in the volume level, Currently on my machine it can achieve very similar overall levels to windows only slightly lacking as I'm still dealing with some distortion when trying to increase it more.. 
+I added a crossover to split the signals after manual mapping all the speaker locations correctly as they were out of order with the stock configuration so if you plan to try this on something other than the listed laptop this may not be correct for your machine. But the crossover really splits the instruments nicely for a real dynamic feel.
+I added a mulitband compressor to brighten up the track. I'm still dealing with some static around the mid-range but any time i target the area of the static it causes the sound quality to fall flat. I think the issue is around the snare frequency because i added a lot of dynamics to try and get the snare to really snap like the dolby atmos dsp manages. 
+Currently it is not perfect. Right now it is workable. Sounds decent but not perfect. The hardest part is retaining the overall level while cleaning up the track. i was able to get a really crisp sound at a lower level but by measurement it was about 6db lower in amplitude that running the windows dsp at full volume. So basically the main challenge has been getting the full max volume out of the speakers while also retaining sound quality. 
 
 Upstream starting point / IR credit: [taprobane99/Lenovo-Yoga-Slim-7x-Dolby-Linux-Audio](https://github.com/taprobane99/Lenovo-Yoga-Slim-7x-Dolby-Linux-Audio). The live graph here is a heavily evolved custom crossover chain (see [docs/TUNING.md](docs/TUNING.md)).
 
