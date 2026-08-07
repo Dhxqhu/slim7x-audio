@@ -11,6 +11,8 @@ I added a mulitband compressor to brighten up the track. I'm still dealing with 
 Currently it is not perfect. Right now it is workable. Sounds decent but not perfect. The hardest part is retaining the overall level while cleaning up the track. i was able to get a really crisp sound at a lower level but by measurement it was about 6db lower in amplitude that running the windows dsp at full volume. So basically the main challenge has been getting the full max volume out of the speakers while also retaining sound quality.
 Tracks used for testing are mostly classic soft rock tracks with lots of character and different instruments like Steely Dan and also high energy edm tracks to test the sound of overproduced tracks through the speakers.
 
+I am not an audio engineer in the slightest. If you know ways to improve this dsp any help is gladly appreciated. If you know less than me and are looking for a simple audio solution for running linux on a Lenovo Yoga Slim 7x then look no further.
+
 Upstream starting point / IR credit: [taprobane99/Lenovo-Yoga-Slim-7x-Dolby-Linux-Audio](https://github.com/taprobane99/Lenovo-Yoga-Slim-7x-Dolby-Linux-Audio). The live graph here is a heavily evolved custom crossover chain (see [docs/TUNING.md](docs/TUNING.md)).
 
 ## Hardware assumptions
