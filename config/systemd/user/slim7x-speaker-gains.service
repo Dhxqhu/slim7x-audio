@@ -5,7 +5,11 @@ Wants=wireplumber.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'sleep 5; %h/.local/bin/slim7x-speaker-gains; sleep 10; %h/.local/bin/slim7x-speaker-gains'
+RemainAfterExit=yes
+# Apply once as soon as PipeWire is up. Delayed re-applies used to
+# sleep 15s and block default.target (and waybar). slim7x-speaker-guard
+# re-applies when UCM/mixer resets gains.
+ExecStart=%h/.local/bin/slim7x-speaker-gains
 
 [Install]
 WantedBy=default.target
