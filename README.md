@@ -1,5 +1,7 @@
 # Slim 7x Audio (Lenovo Yoga Slim 7 14Q8X9)
 
+So you installed linux on your brand new lenovo Yoga Slim 7x only to realize the sound quality and level are absolute garbage? yeah me too.
+
 PipeWire speaker DSP for the **Lenovo Yoga Slim 7x** (Snapdragon X Elite, model `83ED` / `Yoga Slim 7 14Q8X9`).
 
 This is **not** a generic laptop EQ. It is tuned for this machine’s four-speaker layout and ALSA/WSA amp controls, targeting something closer to Windows Dolby loudness/clarity without the mid/high softclip “radio static” that shows up when the tweeters are overdriven. I've
