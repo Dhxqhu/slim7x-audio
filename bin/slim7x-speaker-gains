@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Slim 7x gains: woofer BOOST+softclip on (SPL). Tweeter BOOST off + PA 5 (snare-static headroom).
+# Slim 7x gains: woofer BOOST+softclip on (SPL). Tweeter BOOST off + PA 5 (static headroom).
 # Woofer peaks clamped in DSP; tweeter drive kept cold to avoid softclip hash.
 #
 # PCM channel order (PipeWire/ALSA playback — verified by ear):

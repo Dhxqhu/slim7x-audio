@@ -15,24 +15,24 @@ Speakers (Crossover)   ← PipeWire filter-chain sink (default)
     ├─ Calf Exciter (bypassed — was a grit source)
     ├─ Crisp peak (pre-crossover, currently mild)
     │
-    └─ LSP stereo crossover @ ~1100 Hz
+    └─ LSP stereo crossover @ ~1350 Hz (LR4)
            │
            ├─ Low → woofers (FL/FR)
-           │     HPF ~150 Hz
-           │     kick body shelf + narrow ~175 Hz peak
-           │     mud/box cut ~520 Hz
-           │     woofer compressor (held notes)
-           │     limiter_f (~−1 dBFS)
+           │     HPF ~160 Hz
+           │     kick body shelf + ~180 Hz peak
+           │     mud cut ~380 Hz
+           │     woofer compressor (busy/kick stacks)
+           │     limiter_f (~−4 dBFS)
            │
            └─ High → keyboard tweeters (RL/RR)
-                 HPF ~1200 Hz
-                 mid cloud / rasp static EQ
+                 HPF ~1700 Hz (keeps low keys off bass)
+                 mid cloud / ~3.3 kHz vocal-static EQ
                  kb multiband dyn (mud | rasp | snare | stick)
                  broadband pad
-                 snare/crack EQ (crack below grit; air above)
-                 deep ~6.2 kHz grit notch (radio-static zone)
-                 limiter_r (~−2 dBFS)
-                 LPF ~12.5 kHz
+                 snare/crack EQ; air ~9–11 kHz
+                 grit notch ~5.5–6.2 kHz (radio-static zone)
+                 limiter_r (~−6 dBFS)
+                 LPF ~12 kHz
     │
     ▼
 ALSA HiFi Speaker playback

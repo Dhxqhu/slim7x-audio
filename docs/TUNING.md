@@ -82,8 +82,18 @@ slim7x-load-crossover
 slim7x-speaker-gains
 ```
 
+## 2026-08-07 dial-in (current)
+
+Locked a crisp/loud balance after long A/B. Notable vs earlier tree:
+
+- Broadband convolver **+3 dB**; loudness from mid/high makeups, bass path kept softclip-safe
+- Keyboard HPF **~1700 Hz** so low keys don’t muddy bass
+- Vocal static: wide-ish **~3.3 kHz** sit + rasp dyn that doesn’t chase vibrato (slow attack, longer release on sustains)
+- Sparkle at **~9–11 kHz**, grit still cut around **5.5–6.2 kHz**
+- Busy sections: mid/woofer dyn + colder limiters; avoid raising all thresholds at once (that muddied sparse parts)
+
 ## Still imperfect
 
-- Occasional leftover static if drive into softclip returns
+- Rare kick/vocal crack peaks under very dense material
 - Windows can still win slightly on absolute clarity/loudness
 - Graph is specific to this Slim 7x channel map and amp controls — porting needs re-verification of FL/FR vs RL/RR and mixer order
