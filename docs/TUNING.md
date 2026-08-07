@@ -93,8 +93,27 @@ Locked a crisp/loud balance after long A/B. Notable vs earlier tree:
 - Stacked stabs: faster mid/presence dyn + colder limiters (no steep-XO redo — that muddied)
 - Avoid raising all compressor thresholds at once (muddied sparse parts)
 
+## 2026-08-07 sidechain trial (reverted)
+
+Tried mix-derived kick→mid and snare→mud external SC (`sc_mb_compressor` + LPF/BP keys). Result: muddy + distorted — likely SC preamp/ratio pumping softclip and ducking the wrong energy in a stereo mix. Reverted via `slim7x-revert-dsp`. Backup kept at `config/pipewire/backups/2026-08-07-pre-kick-snare-sc`.
+
+## 2026-08-07 loudness density
+
+Still a touch shy of Windows average SPL with ALSA already maxed usefully. Pushed **average density**, not hotter peaks:
+
+- Pre-XO `mbc` mid makeup `mk_2` +3 → **+4 dB**
+- Pre-XO presence `mk_3` +3 → **+3.5 dB** (half step to avoid cymbal slice)
+- Keyboard broadband pad +1.75 → **+2.25 dB** (keep mid/HF balance)
+- Limiters left cold (`−4.5` / `−6.5` dBFS); no convolver / BOOST / PA change
+
+Backup: `config/pipewire/backups/2026-08-07-pre-loudness-density` (`slim7x-revert-dsp 2026-08-07-pre-loudness-density`).
+
+Follow-up small nudge (same day): `mk_2` +4 → **+4.5 dB**, kb pad +2.25 → **+2.5 dB**; presence/limiters unchanged. Eased back to `mk_2` **+4.25 dB**, pad **+2.35 dB** (last nudge was a tad hot).
+
+Ear-check: more overall level without 5–7 kHz radio-static or woofer grit on held bass. If hash returns, pull pad `0.25–0.5` and/or cold `limiter_r` by `0.5` dB.
+
 ## Still imperfect
 
 - Rare kick/vocal crack peaks under very dense material
-- Windows can still win slightly on absolute clarity/loudness
+- Windows may still win slightly on absolute clarity/loudness after this density pass — re-check by ear
 - Graph is specific to this Slim 7x channel map and amp controls — porting needs re-verification of FL/FR vs RL/RR and mixer order

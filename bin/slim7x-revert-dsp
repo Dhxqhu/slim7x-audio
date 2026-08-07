@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Restore a PipeWire crossover DSP backup and reload.
+# Usage: slim7x-revert-dsp [backup-name]
+# Default: 2026-08-07-pre-kick-snare-sc
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NAME="${1:-2026-08-07-pre-kick-snare-sc}"
+BACKUP="$ROOT/config/pipewire/backups/$NAME"
+
+if [[ ! -d "$BACKUP" ]]; then
+  echo "Backup not found: $BACKUP" >&2
+  echo "Available:" >&2
+  ls -1 "$ROOT/config/pipewire/backups" 2>/dev/null >&2 || true
+  exit 1
+fi
+
+MOD="$BACKUP/slim7x-crossover-module.conf"
+SIXTY="$BACKUP/60-slim7x-crossover.conf"
+[[ -f "$MOD" && -f "$SIXTY" ]] || {
+  echo "Backup missing conf files in $BACKUP" >&2
+  exit 1
+}
+
+echo "==> Restoring repo configs from $NAME"
+cp -a "$MOD" "$ROOT/config/pipewire/slim7x-crossover-module.conf"
+cp -a "$SIXTY" "$ROOT/config/pipewire/pipewire.conf.d/60-slim7x-crossover.conf"
+
+echo "==> Installing to ~/.config/pipewire"
+mkdir -p "$HOME/.config/pipewire/pipewire.conf.d"
+cp -a "$ROOT/config/pipewire/slim7x-crossover-module.conf" \
+  "$HOME/.config/pipewire/slim7x-crossover-module.conf"
+cp -a "$ROOT/config/pipewire/pipewire.conf.d/60-slim7x-crossover.conf" \
+  "$HOME/.config/pipewire/pipewire.conf.d/60-slim7x-crossover.conf"
+
+echo "==> Reloading PipeWire + crossover"
+systemctl --user restart pipewire pipewire-pulse wireplumber
+sleep 2
+systemctl --user restart slim7x-crossover.service slim7x-speaker-guard.service 2>/dev/null || true
+if command -v slim7x-load-crossover >/dev/null; then
+  slim7x-load-crossover
+elif [[ -x "$ROOT/bin/slim7x-load-crossover" ]]; then
+  "$ROOT/bin/slim7x-load-crossover"
+fi
+if command -v slim7x-speaker-gains >/dev/null; then
+  slim7x-speaker-gains
+elif [[ -x "$ROOT/bin/slim7x-speaker-gains" ]]; then
+  "$ROOT/bin/slim7x-speaker-gains"
+fi
+
+echo "Reverted to $NAME"
