@@ -44,7 +44,7 @@ cd slim7x-audio
 
 Then log out/in (or reboot) and select **Speakers (Crossover)** if it is not already the default sink.
 
-Also pulled automatically by [slim7x-hyde](https://github.com/Dhxqhu/slim7x-hyde) (`install.sh` audio step).
+Also pulled automatically by [slim7x-hyde-like-ubuntu](https://github.com/Dhxqhu/slim7x-hyde-like-ubuntu) (`install.sh` audio step).
 
 ## Dependencies (Ubuntu 26.04 arm64)
 
