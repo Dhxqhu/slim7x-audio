@@ -5,6 +5,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ~/.local/bin install has no config/ tree — fall back to the clone
+if [[ ! -d "$ROOT/config/pipewire/backups" ]]; then
+  ROOT="${SLIM7X_AUDIO_ROOT:-$HOME/Documents/slim7x-audio}"
+fi
 NAME="${1:-2026-08-07-pre-kick-snare-sc}"
 BACKUP="$ROOT/config/pipewire/backups/$NAME"
 
