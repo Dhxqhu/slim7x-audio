@@ -119,20 +119,17 @@ Post-reboot felt a bit quiet/dull. Changes:
 - Tweeter **PA 5 → 6** (matched pads `6,6,6,6`); digital already maxed at 81; tweeter BOOST still off
 - DSP highs (keep grit notch + exciter off): air `0.3→1.3`, crisp `@4.6k 0→1.2`, snap `@9.8k 1.4→2.4`, hiss `@11.5k 0.65→1.6`, pre-XO `mk_3` `+3.5→+4.5`, kb aircut `12→14 kHz`
 
-## 2026-09-22 adaptive dynamics
+## 2026-09-22 adaptive dynamics (reverted)
 
-Added content-aware loudness + mild OTT-style punch on the pre-XO stereo path:
+Tried content-aware loudness + mild OTT punch on the pre-XO path:
 
 ```
 conv → autogain → bassex → mbc → gott → air → …
 ```
 
-- **Autogain** (`sc_autogain_stereo`): K-weighted, target **−16 LUFS**, drift **6 dB**, **max_amp +8 dB** capped
-- **GOTT** (`gott_compressor_stereo`): splits 100 / 400 / 2800 Hz, **drywet 35%**, bands 1–3 on, **band 4 off** (no HF upward expand), mild upward ratios 2.5 / 2.0 / 1.8
+- Autogain (−16 LUFS, max +8 dB) + GOTT (drywet 35%, bands 1–3)
 
-Limiters / ALSA gains unchanged. Backup: `config/pipewire/backups/2026-09-22-pre-adaptive-dynamics` (`slim7x-revert-dsp 2026-09-22-pre-adaptive-dynamics`).
-
-If pumping: lower `max_amp` or raise `drift`. If muddy/hashy: lower `drywet` or confirm `be_4=0`.
+**Result:** when drums entered, mix felt **quieter and muddier**. Likely autogain sitting down as LUFS jumped, plus GOTT upward thickening low/mid under dense hits. Reverted via `slim7x-revert-dsp 2026-09-22-pre-adaptive-dynamics` (highs bump + PA 6 kept). Backup left in tree for reference.
 
 ## Still imperfect
 
