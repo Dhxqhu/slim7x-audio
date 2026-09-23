@@ -131,6 +131,15 @@ conv → autogain → bassex → mbc → gott → air → …
 
 **Result:** when drums entered, mix felt **quieter and muddier**. Likely autogain sitting down as LUFS jumped, plus GOTT upward thickening low/mid under dense hits. Reverted via `slim7x-revert-dsp 2026-09-22-pre-adaptive-dynamics` (highs bump + PA 6 kept). Backup left in tree for reference.
 
+## 2026-09-22 low-end fill
+
+Felt hollow after the highs pass. Woofer-path body without touching ALSA BOOST policy:
+
+- Bankstown `amt` 0.50 → **0.62**
+- Woofer shelf @220 +0.5 → **+1.75 dB**; thump @180 +1.5 → **+2.5 dB**
+- Mid scoop @380 −3.5 → **−2.5 dB**; woofer HPF 160 → **145 Hz**
+- Pre-XO bass MBC `mk_1` +5 → **+6 dB**
+
 ## Still imperfect
 
 - Rare kick/vocal crack peaks under very dense material
