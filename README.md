@@ -31,7 +31,7 @@ Verified by ear on this chassis. Other Slim 7 / Yoga models may differ.
 1. **UCM patch** — safer PA / COMP / digital defaults; `alsa-ucm-conf` held
 2. **Dolby impulse responses** → `/usr/share/dolby-audio/`
 3. **PipeWire filter-chain** — convolver + Bankstown + LSP multiband + 2-way crossover + per-path EQ/dynamics/limiters
-4. **ALSA gain script** — woofer BOOST on, tweeter BOOST off, tweeter PA one step down, softclip on
+4. **ALSA gain script** — woofer BOOST on, tweeter BOOST off, matched PA pads (`6,6,6,6`), softclip on
 5. **systemd user units** — load DSP at login, apply gains, re-apply if ALSA drifts
 
 ## Quick install
@@ -82,7 +82,7 @@ amixer -c 0 sget 'WooferLeft BOOST'
 amixer -c 0 sget 'TweeterLeft BOOST'
 ```
 
-Expected: Speakers `6,5,6,5`, woofer BOOST **on**, tweeter BOOST **off**, default sink `Speakers (Crossover)`.
+Expected: Speakers `6,6,6,6`, woofer BOOST **on**, tweeter BOOST **off**, default sink `Speakers (Crossover)`.
 
 ## License / credit
 

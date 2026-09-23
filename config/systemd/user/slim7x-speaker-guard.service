@@ -16,7 +16,7 @@ ExecStart=/bin/bash -c 'while true; do \
   [ "$tb" != "[off]" ] && need=1; \
   [ "$soft" != "[on]" ] && need=1; \
   [ -n "$rx" ] && [ "$rx" -ne 81 ] && need=1; \
-  [ "$vals" != "6,5,6,5" ] && need=1; \
+  [ "$vals" != "6,6,6,6" ] && need=1; \
   if [ "$need" -eq 1 ]; then %h/.local/bin/slim7x-speaker-gains; fi; \
   sleep 2; \
 done'

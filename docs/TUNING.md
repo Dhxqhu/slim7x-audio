@@ -46,7 +46,7 @@ Causes that mattered:
 
 Fixes that stuck:
 
-- Tweeter **BOOST off**, tweeter **PA 5**, colder tweeter limiter (~−2 dBFS)
+- Tweeter **BOOST off**, tweeter **PA 6** (matched pads; was 5 for extra headroom), colder tweeter limiter (~−2 dBFS)
 - Deep/wide grit notch ~**6.2 kHz**
 - Crack peak moved **down** (~4.3 kHz); air moved **up** (~8.5–9.5 kHz) — around the grit band, not through it
 - Exciter bypassed
@@ -70,7 +70,7 @@ Trade-off: aggressive static kill sounded hollow/dull briefly; restored body wit
 |------|------|
 | `config/pipewire/slim7x-crossover-module.conf` | DSP graph (keep `60-slim7x-crossover.conf` identical) |
 | `bin/slim7x-speaker-gains` | ALSA BOOST / PA / digital / softclip |
-| `config/systemd/user/slim7x-speaker-guard.service` | Must match desired gains (6,5,6,5 / BOOST policy) |
+| `config/systemd/user/slim7x-speaker-guard.service` | Must match desired gains (6,6,6,6 / BOOST policy) |
 
 Reload after DSP edits:
 
@@ -111,6 +111,13 @@ Backup: `config/pipewire/backups/2026-08-07-pre-loudness-density` (`slim7x-rever
 Follow-up small nudge (same day): `mk_2` +4 → **+4.5 dB**, kb pad +2.25 → **+2.5 dB**; presence/limiters unchanged. Eased back to `mk_2` **+4.25 dB**, pad **+2.35 dB** (last nudge was a tad hot).
 
 Ear-check: more overall level without 5–7 kHz radio-static or woofer grit on held bass. If hash returns, pull pad `0.25–0.5` and/or cold `limiter_r` by `0.5` dB.
+
+## 2026-09-22 volume + highs
+
+Post-reboot felt a bit quiet/dull. Changes:
+
+- Tweeter **PA 5 → 6** (matched pads `6,6,6,6`); digital already maxed at 81; tweeter BOOST still off
+- DSP highs (keep grit notch + exciter off): air `0.3→1.3`, crisp `@4.6k 0→1.2`, snap `@9.8k 1.4→2.4`, hiss `@11.5k 0.65→1.6`, pre-XO `mk_3` `+3.5→+4.5`, kb aircut `12→14 kHz`
 
 ## Still imperfect
 

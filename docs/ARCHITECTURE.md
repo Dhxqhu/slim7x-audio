@@ -48,7 +48,7 @@ ALSA HiFi Speaker playback
 
 - **Woofer BOOST on** — needed for Windows-like average SPL / kick weight.
 - **Tweeter BOOST off** — with BOOST on, mid/high energy softclipped into a constant “radio static” hash around the snare band (~5–7 kHz), even when DSP peaking looked modest.
-- **Tweeter PA 5 (−1.5 dB)** — extra hardware headroom on the keyboard drivers while woofers stay at 0 dB pad.
+- **Tweeter PA 6 (0 dB)** — matched to woofers; tweeter BOOST stays off for softclip headroom.
 
 ## PipeWire / systemd pieces
 
